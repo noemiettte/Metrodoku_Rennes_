@@ -1,245 +1,348 @@
+const categories = Object.keys(STATIONS[0].props);
+
 let errors = 0;
 const MAX_ERRORS = 3;
 let gameOver = false;
-let currentSolution = {};
-let currentRows = [];
-let currentCols = [];
-let modalR = '';
-let modalC = '';
 
-const categories = Object.keys(STATIONS[0].props);
+// ---------------------------------------------------------------------------
+// Utilitaires de génération
+// ---------------------------------------------------------------------------
 
-function seededRandom(s) {
-  let x = Math.sin(s) * 10000;
+function seededRandom(seed) {
+  const x = Math.sin(seed) * 10000;
   return x - Math.floor(x);
 }
 
-function shuffle(arr, s) {
-  let a = [...arr];
+function shuffle(arr, seed) {
+  const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(seededRandom(s + i) * (i + 1));
+    const j = Math.floor(seededRandom(seed + i) * (i + 1));
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
 }
 
+/**
+ * Graine basée sur la date locale : change chaque jour à minuit.
+ * Format : YYYYMMDD (ex. 20260617) → nombre stable toute la journée.
+ */
 function dailySeed() {
   const d = new Date();
-  return Number(`${d.getFullYear()}${d.getMonth() + 1}${d.getDate()}`);
+  const yyyy = d.getFullYear();
+  const mm   = String(d.getMonth() + 1).padStart(2, '0');
+  const dd   = String(d.getDate()).padStart(2, '0');
+  return Number(`${yyyy}${mm}${dd}`);
 }
+
+// ---------------------------------------------------------------------------
+// Résolution par backtracking
+// ---------------------------------------------------------------------------
 
 function findSolution(rows, cols) {
   const cells = [];
-  rows.forEach(r => cols.forEach(c => {
-    cells.push({ row: r, col: c, candidates: STATIONS.filter(s => s.props[r] && s.props[c]) });
-  }));
+
+  rows.forEach(row => {
+    cols.forEach(col => {
+      cells.push({
+        row,
+        col,
+        candidates: STATIONS.filter(
+          s => s.props[row] && s.props[col]
+        )
+      });
+    });
+  });
+
+  // On commence par les cases avec le moins de candidats (plus rapide)
   cells.sort((a, b) => a.candidates.length - b.candidates.length);
-  const used = new Set(), sol = {};
-  function bt(i) {
-    if (i === cells.length) return true;
-    for (const st of cells[i].candidates) {
-      if (used.has(st.name)) continue;
-      used.add(st.name);
-      sol[`${cells[i].row}|${cells[i].col}`] = st.name;
-      if (bt(i + 1)) return true;
-      used.delete(st.name);
-      delete sol[`${cells[i].row}|${cells[i].col}`];
+
+  const used     = new Set();
+  const solution = {};
+
+  function backtrack(index) {
+    if (index === cells.length) return true;
+
+    const cell = cells[index];
+    for (const station of cell.candidates) {
+      if (used.has(station.name)) continue;
+
+      used.add(station.name);
+      solution[`${cell.row}|${cell.col}`] = station.name;
+
+      if (backtrack(index + 1)) return true;
+
+      used.delete(station.name);
+      delete solution[`${cell.row}|${cell.col}`];
     }
     return false;
   }
-  return bt(0) ? sol : null;
+
+  return backtrack(0) ? solution : null;
 }
+
+// ---------------------------------------------------------------------------
+// Génération de la grille
+// ---------------------------------------------------------------------------
 
 function generateValidGrid(seed) {
-  for (let a = 0; a < 500; a++) {
-    const rows = shuffle(categories, seed + a).slice(0, 3);
-    const rem = categories.filter(c => !rows.includes(c));
-    const cols = shuffle(rem, seed + 1000 + a).slice(0, 3);
-    const sol = findSolution(rows, cols);
-    if (sol) return { rows, cols, solution: sol };
+  let attempts = 0;
+
+  while (attempts < 500) {
+    // Les catégories de lignes et de colonnes doivent être DISTINCTES
+    const rows = shuffle(categories, seed + attempts).slice(0, 3);
+    const remaining = categories.filter(c => !rows.includes(c));
+
+    if (remaining.length < 3) {
+      throw new Error('Pas assez de catégories distinctes');
+    }
+
+    const cols     = shuffle(remaining, seed + 1000 + attempts).slice(0, 3);
+    const solution = findSolution(rows, cols);
+
+    if (solution) return { rows, cols, solution };
+    attempts++;
   }
-  throw new Error('Pas de grille valide');
+
+  throw new Error('Impossible de générer une grille valide');
 }
 
-function getLine(station) {
-  if (station.lines) return station.lines.join('/');
-  return station.line || '?';
+// ---------------------------------------------------------------------------
+// Autocomplétion
+// ---------------------------------------------------------------------------
+
+function normalize(str) {
+  return str
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
 }
 
-function key(r, c) {
-  return (r + '|' + c).replace(/[^a-zA-Z0-9]/g, '_');
+function getSuggestions(value) {
+  const normValue = normalize(value.trim());
+  if (normValue.length < 3) return [];
+
+  return STATIONS
+    .filter(s => normalize(s.name).includes(normValue))
+    .slice(0, 8);
 }
 
-function setStatus(text, cls) {
-  const el = document.getElementById('status');
-  el.textContent = text;
-  el.className = cls || '';
+function setupAutocomplete(input) {
+  const list = input.parentElement.querySelector('.suggestions');
+
+  input.addEventListener('input', () => {
+    if (gameOver || input.disabled) return;
+
+    const matches = getSuggestions(input.value);
+    list.innerHTML = '';
+
+    if (matches.length === 0) {
+      list.classList.remove('visible');
+      return;
+    }
+
+    matches.forEach(station => {
+      const li = document.createElement('li');
+      li.textContent = station.name;
+      li.addEventListener('mousedown', e => {
+        e.preventDefault();
+        input.value = station.name;
+        list.innerHTML = '';
+        list.classList.remove('visible');
+        input.dispatchEvent(new Event('change'));
+      });
+      list.appendChild(li);
+    });
+
+    list.classList.add('visible');
+  });
+
+  // Petit délai pour laisser le clic mousedown s'exécuter avant le blur
+  input.addEventListener('blur', () => {
+    setTimeout(() => list.classList.remove('visible'), 120);
+  });
+
+  input.addEventListener('focus', () => {
+    if (input.value.trim().length >= 3) {
+      input.dispatchEvent(new Event('input'));
+    }
+  });
 }
 
-function updateHearts() {
-  for (let i = 1; i <= 3; i++) {
-    const h = document.getElementById('h' + i);
-    if (h) h.className = 'heart' + (i <= errors ? ' lost' : '');
+// ---------------------------------------------------------------------------
+// Révélation des solutions en fin de partie
+// ---------------------------------------------------------------------------
+
+function clearSuggestions(td) {
+  const list = td.querySelector('.suggestions');
+  if (list) {
+    list.innerHTML = '';
+    list.classList.remove('visible');
   }
 }
+
+function revealAllSolutions() {
+  document.querySelectorAll('#grid td').forEach(td => {
+    const input = td.querySelector('input');
+    const row   = input.dataset.r;
+    const col   = input.dataset.c;
+
+    clearSuggestions(td);
+
+    // Toutes les stations valides pour cette case, triées alphabétiquement
+    const candidates = STATIONS
+      .filter(s => s.props[row] && s.props[col])
+      .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+
+    // La station retenue par l'algorithme pour cette case
+    const usedAnswer = window.currentSolution[`${row}|${col}`];
+
+    let solDiv = td.querySelector('.solutions');
+    if (!solDiv) {
+      solDiv = document.createElement('div');
+      solDiv.className = 'solutions';
+      td.appendChild(solDiv);
+    }
+
+    solDiv.innerHTML = candidates
+      .map(s => {
+        const cls = s.name === usedAnswer ? ' class="solution-used"' : '';
+        return `<span${cls}>${s.name}</span>`;
+      })
+      .join(', ');
+
+    solDiv.classList.add('visible');
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Création de la grille
+// ---------------------------------------------------------------------------
 
 function create(seed) {
-  errors = 0;
+  errors  = 0;
   gameOver = false;
-  activeCell = null;
-  updateHearts();
-  const puzzle = generateValidGrid(seed);
-  currentSolution = puzzle.solution;
-  currentRows = puzzle.rows;
-  currentCols = puzzle.cols;
-  document.getElementById('solutions-panel').innerHTML = '';
-  document.getElementById('solutions-panel').className = '';
 
-  let h = '<table><tr><th class="corner"></th>';
-  currentCols.forEach(c => { h += `<th class="col-header">${c}</th>`; });
+  const puzzle = generateValidGrid(seed);
+  window.currentSolution = puzzle.solution;
+
+  const { rows, cols } = puzzle;
+
+  let h = '<table><tr><th></th>';
+  cols.forEach(c => { h += `<th>${c}</th>`; });
   h += '</tr>';
-  currentRows.forEach(r => {
-    h += `<tr><th class="row-header">${r}</th>`;
-    currentCols.forEach(c => {
-      h += `<td class="cell" id="cell-${key(r, c)}" onclick="openModal('${r.replace(/'/g, "\\'")}','${c.replace(/'/g, "\\'")}')">
-        <div class="cell-inner">
-          <span class="cell-placeholder">Appuyer pour choisir…</span>
-        </div>
-      </td>`;
+
+  rows.forEach(r => {
+    h += `<tr><th>${r}</th>`;
+    cols.forEach(c => {
+      h += `
+        <td>
+          <div class="autocomplete-wrapper">
+            <input data-r="${r}" data-c="${c}" autocomplete="off" placeholder="Station…">
+            <ul class="suggestions"></ul>
+          </div>
+        </td>`;
     });
     h += '</tr>';
   });
+
   h += '</table>';
-  document.getElementById('grid-area').innerHTML = h;
-  setStatus('3 vies restantes — 9 cases à remplir', '');
+
+  document.getElementById('grid').innerHTML   = h;
+  document.getElementById('result').textContent = `Erreurs : 0 / ${MAX_ERRORS}`;
+
+  document.querySelectorAll('#grid input').forEach(input => {
+    input.addEventListener('change', () => validateInput(input));
+    setupAutocomplete(input);
+  });
 }
 
-function openModal(r, c) {
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+function validateInput(input) {
   if (gameOver) return;
-  const td = document.getElementById('cell-' + key(r, c));
-  if (td && td.classList.contains('ok')) return;
-  modalR = r;
-  modalC = c;
-  document.getElementById('modal-title').textContent = `${r} ✕ ${c}`;
-  const n = STATIONS.filter(s => s.props[r] && s.props[c]).length;
-  document.getElementById('modal-hint').textContent = `${n} station${n > 1 ? 's' : ''} possible${n > 1 ? 's' : ''}`;
-  document.getElementById('modal-input').value = '';
-  filterModal();
-  document.getElementById('modal-overlay').classList.add('open');
-  setTimeout(() => document.getElementById('modal-input').focus(), 100);
-}
 
-function closeModal() {
-  document.getElementById('modal-overlay').classList.remove('open');
-  document.getElementById('modal-input').value = '';
-  modalR = '';
-  modalC = '';
-}
+  const name = input.value.trim().toLowerCase();
+  if (!name) return;
 
-function normalize(s) {
-  return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-}
+  const station = STATIONS.find(s => s.name.toLowerCase() === name);
 
-function filterModal() {
-  const val = document.getElementById('modal-input').value;
-  const norm = normalize(val.trim());
-  let matches = STATIONS;
-  if (norm.length >= 2) matches = STATIONS.filter(s => normalize(s.name).includes(norm));
-  const list = document.getElementById('modal-list');
-  const usedNames = new Set(
-    [...document.querySelectorAll('.cell.ok')]
-      .map(td => td.querySelector('.cell-ok-name')?.textContent)
-      .filter(Boolean)
-  );
-  list.innerHTML = matches.slice(0, 20).map(s => {
-    const used = usedNames.has(s.name);
-    const possible = s.props[modalR] && s.props[modalC];
-    return `<div class="modal-item" onclick="pickStation('${s.name.replace(/'/g, "\\'")}')">
-      <div class="modal-item-name" style="${used ? 'color:var(--muted);text-decoration:line-through' : ''}${!possible ? ';opacity:.4' : ''}">${s.name}</div>
-      <div class="modal-item-line">Ligne ${getLine(s)}${possible ? ' ✓' : ' ✗'}${used ? ' · déjà utilisée' : ''}</div>
-    </div>`;
-  }).join('');
-}
+  const duplicate = [...document.querySelectorAll('#grid input')]
+    .filter(i => i !== input)
+    .some(i => i.value.trim().toLowerCase() === name);
 
-function pickStation(name) {
-  const r = modalR;
-  const c = modalC;
-  closeModal();
-  validateChoice(name, r, c);
-}
+  const valid =
+    station &&
+    !duplicate &&
+    station.props[input.dataset.r] &&
+    station.props[input.dataset.c];
 
-function validateChoice(name, r, c) {
-  const station = STATIONS.find(s => s.name === name);
-  const td = document.getElementById('cell-' + key(r, c));
-  const usedNames = new Set(
-    [...document.querySelectorAll('.cell.ok')]
-      .map(el => el.querySelector('.cell-ok-name')?.textContent)
-      .filter(Boolean)
-  );
-  const valid = station && !usedNames.has(name) && station.props[r] && station.props[c];
   if (valid) {
-    td.classList.add('ok');
-    td.innerHTML = `<div class="cell-inner">
-      <div class="cell-ok-name">${name}</div>
-      <div class="cell-line">Ligne ${getLine(station)}</div>
-    </div>`;
-    checkVictory();
+    input.classList.remove('bad');
+    input.classList.add('ok');
+    input.disabled = true;
+    clearSuggestions(input.closest('td'));
   } else {
+    input.classList.remove('ok');
+    input.classList.add('bad');
     errors++;
-    updateHearts();
-    td.classList.add('bad', 'shake');
-    setTimeout(() => td.classList.remove('shake', 'bad'), 600);
-    setStatus(
-      `${MAX_ERRORS - errors} vie${MAX_ERRORS - errors !== 1 ? 's' : ''} restante${MAX_ERRORS - errors !== 1 ? 's' : ''}`,
-      errors >= MAX_ERRORS ? 'lost' : ''
-    );
+    document.getElementById('result').textContent =
+      `Erreurs : ${errors} / ${MAX_ERRORS}`;
+
     if (errors >= MAX_ERRORS) {
       gameOver = true;
-      setStatus('💀 Game Over !', 'lost');
-      revealSolutions();
+      document.querySelectorAll('#grid input').forEach(i => {
+        i.disabled = true;
+        clearSuggestions(i.closest('td'));
+      });
+      document.getElementById('result').textContent =
+        '💀 Game Over — 3 erreurs';
+      revealAllSolutions();
+      return;
     }
   }
+
+  checkVictory();
+}
+
+// ---------------------------------------------------------------------------
+// Vérification / victoire
+// ---------------------------------------------------------------------------
+
+function checkAllInputs() {
+  if (gameOver) return;
+  document.querySelectorAll('#grid input:not(:disabled)').forEach(input => {
+    if (input.value.trim()) validateInput(input);
+  });
 }
 
 function checkVictory() {
-  if (document.querySelectorAll('.cell.ok').length === 9) {
+  const inputs = [...document.querySelectorAll('#grid input')];
+  const won    = inputs.every(i => i.disabled && i.classList.contains('ok'));
+
+  if (won) {
     gameOver = true;
-    setStatus('🎉 Bravo, Métrodoku complété !', 'won');
-    revealSolutions();
+    document.getElementById('result').textContent =
+      '🎉 Bravo ! Métrodoku complété !';
+    revealAllSolutions();
   }
 }
 
-function revealSolutions() {
-  const panel = document.getElementById('solutions-panel');
-  panel.className = 'visible';
-  let h = '<h3>Solutions possibles par case</h3><div class="sol-grid">';
-  currentRows.forEach(r => {
-    currentCols.forEach(c => {
-      const cands = STATIONS
-        .filter(s => s.props[r] && s.props[c])
-        .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
-      const okEl = document.getElementById('cell-' + key(r, c));
-      const playerAnswer = okEl?.querySelector('.cell-ok-name')?.textContent || '';
-      h += `<div class="sol-cell">
-        <div class="sol-cell-label">${r.substring(0, 20)}<br>× ${c.substring(0, 20)}</div>
-        <div class="sol-names">${cands.map(s => `<span class="${s.name === playerAnswer ? 'used' : ''}">${s.name}</span>`).join('')}</div>
-      </div>`;
-    });
-  });
-  h += '</div>';
-  panel.innerHTML = h;
-}
+// ---------------------------------------------------------------------------
+// Boutons
+// ---------------------------------------------------------------------------
 
-function shareGame() {
-  const ok = document.querySelectorAll('.cell.ok').length;
-  const txt = `🚇 Métrodoku Rennes\n${ok}/9 cases • ${errors} erreur${errors !== 1 ? 's' : ''}\nJoue sur Claude !`;
-  if (navigator.share) {
-    navigator.share({ text: txt });
-  } else if (navigator.clipboard) {
-    navigator.clipboard.writeText(txt).then(() => alert('Copié !'));
-  } else {
-    alert(txt);
-  }
-}
+document.getElementById('dailyBtn').onclick  = () => create(dailySeed());
+document.getElementById('randomBtn').onclick = () => create(Date.now());
+document.getElementById('checkBtn').onclick  = checkAllInputs;
+document.getElementById('shareBtn').onclick  = () => {
+  navigator.clipboard.writeText('Je joue à Métrodoku Rennes !');
+  alert('Texte copié dans le presse-papier.');
+};
+
+// ---------------------------------------------------------------------------
+// Lancement
+// ---------------------------------------------------------------------------
 
 create(dailySeed());
