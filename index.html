@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Metrodoku Rennes</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>🚇 Métrodoku Rennes</h1>
+    <p>Une station par case, satisfaisant ligne et colonne</p>
+  </header>
+  <div id="errors-bar">
+    <span class="heart" id="h1">❤️</span>
+    <span class="heart" id="h2">❤️</span>
+    <span class="heart" id="h3">❤️</span>
+  </div>
+  <div id="status">Chargement…</div>
+  <div class="toolbar">
+    <button class="btn-primary" onclick="create(dailySeed())">Défi du jour</button>
+    <button class="btn-secondary" onclick="create(Date.now())">Aléatoire</button>
+    <button class="btn-secondary btn-wide" onclick="shareGame()">Partager 🔗</button>
+  </div>
+  <div id="grid-area"></div>
+  <div id="solutions-panel"></div>
+</div>
+
+<div id="modal-overlay" onclick="closeModal()">
+  <div id="modal" onclick="event.stopPropagation()">
+    <h2 id="modal-title">Choisir une station</h2>
+    <input id="modal-input" placeholder="Rechercher une station…" autocomplete="off" spellcheck="false" oninput="filterModal()">
+    <div id="modal-hint"></div>
+    <div id="modal-list"></div>
+    <button id="modal-cancel" onclick="closeModal()">Annuler</button>
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
